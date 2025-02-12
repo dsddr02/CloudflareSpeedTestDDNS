@@ -23,7 +23,7 @@ else
 fi
 
 # 获取域名填写数量
-num=${#hostname[*]};
+num=${#hostname[@]};
 
 # 判断优选ip数量是否大于域名数，小于则让优选数与域名数相同
 if [ "$CFST_DN" -le $num ] ; then
