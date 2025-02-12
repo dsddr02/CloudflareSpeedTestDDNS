@@ -127,48 +127,55 @@ x=0
 while [[ ${x} -lt $num ]]; do
   CDNhostname=${hostname[$x]}
   
-  # 获取优选后的ip地址
-  ipAddr=$(sed -n "$((x + 2)),1p" ./cf_ddns/result.csv | awk -F, '{print $1}');
-  ipSpeed=$(sed -n "$((x + 2)),1p" ./cf_ddns/result.csv | awk -F, '{print $6}');
-  if [ $ipSpeed = "0.00" ]; then
-    echo "第$((x + 1))个---$ipAddr测速为0，跳过更新DNS，检查配置是否能正常测速！";
+  # 获取优选后的ip地址和测速
+  read -r ipAddr ipSpeed <<< $(sed -n "$((x + 2)),1p" ./cf_ddns/result.csv | awk -F, '{print $1, $6}')
+  
+  if [ "$ipSpeed" = "0.00" ]; then
+    echo "第$((x + 1))个---$ipAddr测速为0，跳过更新DNS，检查配置是否能正常测速！"
   else
+    # 根据设置更新Hosts或Cloudflare
     if [ "$IP_TO_HOSTS" = 1 ]; then
-      echo $ipAddr $CDNhostname >> ./cf_ddns/hosts_new
+      echo "$ipAddr $CDNhostname" >> ./cf_ddns/hosts_new
     fi
 
     if [ "$IP_TO_CF" = 1 ]; then
       echo "开始更新第$((x + 1))个---$ipAddr"
 
-      # 开始DDNS
+      # 确定记录类型（A或AAAA）
       if [[ $ipAddr =~ $ipv4Regex ]]; then
         recordType="A"
       else
         recordType="AAAA"
       fi
 
+      # Cloudflare API 地址
       listDnsApi="https://api.cloudflare.com/client/v4/zones/${zone_id}/dns_records?type=${recordType}&name=${CDNhostname}"
       createDnsApi="https://api.cloudflare.com/client/v4/zones/${zone_id}/dns_records"
+      updateDnsApi="https://api.cloudflare.com/client/v4/zones/${zone_id}/dns_records"
 
       # 关闭小云朵
       proxy="false"
   
+      # 获取当前DNS记录
       res=$(curl -s -X GET "$listDnsApi" -H "X-Auth-Email:$x_email" -H "X-Auth-Key:$api_key" -H "Content-Type:application/json")
       recordId=$(echo "$res" | jq -r ".result[0].id")
       recordIp=$(echo "$res" | jq -r ".result[0].content")
-  
+
+      # 检查是否需要更新
       if [[ $recordIp = "$ipAddr" ]]; then
         echo "更新失败，获取最快的IP与云端相同"
         resSuccess=false
       elif [[ $recordId = "null" ]]; then
+        # 没有记录，创建新的记录
         res=$(curl -s -X POST "$createDnsApi" -H "X-Auth-Email:$x_email" -H "X-Auth-Key:$api_key" -H "Content-Type:application/json" --data "{\"type\":\"$recordType\",\"name\":\"$CDNhostname\",\"content\":\"$ipAddr\",\"proxied\":$proxy}")
         resSuccess=$(echo "$res" | jq -r ".success")
       else
-        updateDnsApi="https://api.cloudflare.com/client/v4/zones/${zone_id}/dns_records/${recordId}"
-        res=$(curl -s -X PUT "$updateDnsApi"  -H "X-Auth-Email:$x_email" -H "X-Auth-Key:$api_key" -H "Content-Type:application/json" --data "{\"type\":\"$recordType\",\"name\":\"$CDNhostname\",\"content\":\"$ipAddr\",\"proxied\":$proxy}")
+        # 更新现有记录
+        res=$(curl -s -X PUT "$updateDnsApi/$recordId" -H "X-Auth-Email:$x_email" -H "X-Auth-Key:$api_key" -H "Content-Type:application/json" --data "{\"type\":\"$recordType\",\"name\":\"$CDNhostname\",\"content\":\"$ipAddr\",\"proxied\":$proxy}")
         resSuccess=$(echo "$res" | jq -r ".success")
       fi
-  
+
+      # 打印更新结果
       if [[ $resSuccess = "true" ]]; then
         echo "$CDNhostname更新成功"
       else
@@ -179,6 +186,7 @@ while [[ ${x} -lt $num ]]; do
   x=$((x + 1))
   sleep 3s
 done > $informlog
+
 
 if [ "$IP_TO_HOSTS" = 1 ]; then
   if [ ! -f "/etc/hosts.old_cfstddns_bak" ]; then
