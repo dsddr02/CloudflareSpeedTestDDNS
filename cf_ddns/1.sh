@@ -5,21 +5,47 @@
 ipv4Regex="((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])";
 
 #获取空间id
-zone_id=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$(echo ${hostname[0]} | cut -d "." -f 2-)" -H "X-Auth-Email: $x_email" -H "X-Auth-Key: $api_key" -H "Content-Type: application/json" | jq -r '.result[0].id' )
-
-if [ "$IP_TO_CF" = "1" ]; then
-  # 验证cf账号信息是否正确
-  res=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/${zone_id}" -H "X-Auth-Email:$x_email" -H "X-Auth-Key:$api_key" -H "Content-Type:application/json");
-  resSuccess=$(echo "$res" | jq -r ".success");
-  if [[ $resSuccess != "true" ]]; then
-    echo "登陆错误，检查cloudflare账号信息填写是否正确!"
-    echo "登陆错误，检查cloudflare账号信息填写是否正确!" > $informlog
-    source $cf_push;
-    exit 1;
+getZoneId() {
+  response=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$(echo ${hostname[0]} | cut -d "." -f 2-)" \
+    -H "X-Auth-Email: $x_email" -H "X-Auth-Key: $api_key" -H "Content-Type: application/json")
+    
+  zone_id=$(echo "$response" | jq -r '.result[0].id')
+  
+  # 如果 zone_id 为空，表示查询失败
+  if [[ -z "$zone_id" ]]; then
+    echo "无法获取 Zone ID，检查域名是否正确，或者 Cloudflare 账户配置是否正确。"
+    echo "$response" >> $informlog  # 记录详细错误信息到日志
+    exit 1
   fi
-  echo "Cloudflare账号验证成功";
+  echo "Zone ID 获取成功: $zone_id"
+}
+
+# 验证 Cloudflare 账号信息是否正确
+validateCloudflareAccount() {
+  # 调用获取 Zone 信息接口
+  res=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/${zone_id}" \
+    -H "X-Auth-Email: $x_email" -H "X-Auth-Key: $api_key" -H "Content-Type: application/json")
+    
+  # 检查 API 返回的 success 字段
+  resSuccess=$(echo "$res" | jq -r ".success")
+  if [[ $resSuccess != "true" ]]; then
+    # 如果登录失败，提取错误信息并输出
+    errorMessage=$(echo "$res" | jq -r ".errors[0].message")
+    echo "Cloudflare 登录失败：$errorMessage"
+    echo "Cloudflare 登录失败：$errorMessage" >> $informlog
+    source $cf_push
+    exit 1
+  fi
+  
+  echo "Cloudflare 账号验证成功"
+}
+
+# 获取并验证 Cloudflare 账号
+if [ "$IP_TO_CF" = "1" ]; then
+  getZoneId
+  validateCloudflareAccount
 else
-  echo "未配置Cloudflare账号"
+  echo "未配置 Cloudflare 账号"
 fi
 
 # 获取域名填写数量
@@ -126,79 +152,94 @@ updateDNSRecords() {
   subdomain=$1
   domain=$2
   csv_file='./cf_ddns/result.csv'
-  # Add new DNS records from results.csv
-  if [[ -f $csv_file ]]; then
-      # Delete existing DNS records
-    url="https://api.cloudflare.com/client/v4/zones/$zone_id/dns_records"
-    params="name=${subdomain}.${domain}&type=A,AAAA"
-    response=$(curl -sm10 -X GET "$url?$params" -H "X-Auth-Email: $x_email" -H "X-Auth-Key: $api_key")
-    if [[ $(echo "$response" | jq -r '.success') == "true" ]]; then
-      records=$(echo "$response" | jq -r '.result')
-      if [[ $(echo "$records" | jq 'length') -gt 0 ]]; then
-        for record in $(echo "$records" | jq -c '.[]'); do
-          record_id=$(echo "$record" | jq -r '.id')
-          delete_url="$url/$record_id"
-          delete_response=$(curl -sm10 -X DELETE "$delete_url" -H "X-Auth-Email: $x_email" -H "X-Auth-Key: $api_key")
-          if [[ $(echo "$delete_response" | jq -r '.success') == "true" ]]; then
-            echo "成功删除DNS记录$(echo "$record" | jq -r '.name')"
-          else
-            echo "删除DNS记录失败"
-          fi
-        done
-      else
-        echo "没有找到相关DNS记录"
-      fi
-    else
-      echo "没有拿到DNS记录"
-    fi
-    # Declare an array to hold the IPs with positive speed
-    declare -a ips
 
-    # Assuming num is the total number of IPs in result.csv
-    num=$(awk -F, 'END {print NR-1}' ./cf_ddns/result.csv)  # Subtract 1 if there's a header line in result.csv
-
-    x=0  # Initialize counter
-    while [[ ${x} -lt ${num} ]]; do
-      ipAddr=$(sed -n "$((x + 2)),1p" ./cf_ddns/result.csv | awk -F, '{print $1}')
-      ipSpeed=$(sed -n "$((x + 2)),1p" ./cf_ddns/result.csv | awk -F, '{print $6}')
-
-      if [[ $ipSpeed == "0.00" ]]; then
-        echo "第$((x + 1))个---$ipAddr测速为0，跳过更新DNS，检查配置是否能正常测速！"
-      else
-#        echo "准备更新第$((x + 1))个---$ipAddr"
-        # Append the IP address to the ips array
-        ips+=("$ipAddr")
-      fi
-
-      x=$((x + 1))  # Increment counter
-    done
-
-    for ip in "${ips[@]}"; do
-      url="https://api.cloudflare.com/client/v4/zones/$zone_id/dns_records"
-      if [[ "$ip" =~ ":" ]]; then
-        record_type="AAAA"
-      else
-        record_type="A"
-      fi
-      data='{
-          "type": "'"$record_type"'",
-          "name": "'"$subdomain.$domain"'",
-          "content": "'"$ip"'",
-          "ttl": 60,
-          "proxied": false
-      }'
-      response=$(curl -s -X POST "$url" -H "X-Auth-Email: $x_email" -H "X-Auth-Key: $api_key" -H "Content-Type: application/json" -d "$data")
-      if [[ $(echo "$response" | jq -r '.success') == "true" ]]; then
-        echo "${subdomain}.${domain}成功指向IP地址$ip"
-      else
-        echo "更新IP地址${ip}失败"
-      fi
-      sleep 1
-    done
-  else
-    echo "CSV文件$csv_file不存在"
+  # 检查是否存在 CSV 文件
+  if [[ ! -f $csv_file ]]; then
+    echo "CSV 文件不存在，无法更新 DNS 记录"
+    return 1
   fi
+
+  # 获取并删除现有 DNS 记录
+  echo "正在删除现有的 DNS 记录..."
+  url="https://api.cloudflare.com/client/v4/zones/$zone_id/dns_records"
+  params="name=${subdomain}.${domain}&type=A,AAAA"
+  response=$(curl -sm10 -X GET "$url?$params" -H "X-Auth-Email: $x_email" -H "X-Auth-Key: $api_key" -H "Content-Type: application/json")
+  
+  if [[ $(echo "$response" | jq -r '.success') == "true" ]]; then
+    records=$(echo "$response" | jq -r '.result')
+    if [[ $(echo "$records" | jq 'length') -gt 0 ]]; then
+      # 删除每条记录
+      for record in $(echo "$records" | jq -c '.[]'); do
+        record_id=$(echo "$record" | jq -r '.id')
+        delete_url="$url/$record_id"
+        delete_response=$(curl -sm10 -X DELETE "$delete_url" -H "X-Auth-Email: $x_email" -H "X-Auth-Key: $api_key" -H "Content-Type: application/json")
+        
+        if [[ $(echo "$delete_response" | jq -r '.success') == "true" ]]; then
+          echo "成功删除 DNS 记录：$(echo "$record" | jq -r '.name')"
+        else
+          echo "删除 DNS 记录失败：$(echo "$record" | jq -r '.name')"
+        fi
+      done
+    else
+      echo "未找到需要删除的 DNS 记录"
+    fi
+  else
+    echo "获取现有 DNS 记录失败"
+  fi
+
+  # 添加新的 DNS 记录
+  echo "正在添加新的 DNS 记录..."
+  
+  # 读取 result.csv 文件并提取有效的 IP 地址
+  declare -a ips
+  num=$(awk -F, 'END {print NR-1}' $csv_file)  # 获取记录数
+  x=0
+
+  while [[ ${x} -lt ${num} ]]; do
+    ipAddr=$(sed -n "$((x + 2)),1p" $csv_file | awk -F, '{print $1}')
+    ipSpeed=$(sed -n "$((x + 2)),1p" $csv_file | awk -F, '{print $6}')
+    
+    # 检查速度是否为0，若为0则跳过
+    if [[ $ipSpeed == "0.00" ]]; then
+      echo "第$((x + 1))个---$ipAddr 测速为 0，跳过更新 DNS 记录"
+    else
+      # 将有效的 IP 地址加入数组
+      ips+=("$ipAddr")
+    fi
+    x=$((x + 1))
+  done
+
+  # 更新每个有效的 IP 地址
+  for ip in "${ips[@]}"; do
+    if [[ "$ip" =~ ":" ]]; then
+      record_type="AAAA"
+    else
+      record_type="A"
+    fi
+
+    # 构建 DNS 更新请求的数据
+    data='{
+      "type": "'"$record_type"'",
+      "name": "'"$subdomain.$domain"'",
+      "content": "'"$ip"'",
+      "ttl": 60,
+      "proxied": false
+    }'
+
+    # 发送 API 请求以添加 DNS 记录
+    response=$(curl -s -X POST "$url" -H "X-Auth-Email: $x_email" -H "X-Auth-Key: $api_key" -H "Content-Type: application/json" -d "$data")
+
+    if [[ $(echo "$response" | jq -r '.success') == "true" ]]; then
+      echo "DNS 记录 ${subdomain}.${domain} 成功指向 IP 地址 $ip"
+    else
+      echo "更新 IP 地址 $ip 失败"
+    fi
+    sleep 3  # 为了避免 API 限制，稍作延迟
+  done
 }
+
+# 调用更新 DNS 记录函数
+#updateDNSRecords $subdomain $domain
 
 # Begin loop
 echo "正在更新域名，请稍等"
