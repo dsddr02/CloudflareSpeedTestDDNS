@@ -40,6 +40,7 @@ if [ "$IP_ADDR" = "ipv6" ] ; then
     echo "当前工作模式为ipv6";
   fi
 else
+  curl -o ./cf_ddns/ip.txt https://raw.githubusercontent.com/ymyuuu/IPDB/refs/heads/main/bestcf.txt
   echo "当前工作模式为ipv4";
 fi
 
@@ -105,8 +106,8 @@ elif [ "$IP_ADDR" = "ipv6" ] ; then
   $CloudflareST $CFST_URL_R -t $CFST_T -n $CFST_N -dn $CFST_DN -tl $CFST_TL -dt $CFST_DT -tp $CFST_TP -tll $CFST_TLL -sl $CFST_SL -p $CFST_P -tlr $CFST_TLR $CFST_STM -f ./cf_ddns/ipv6.txt -o ./cf_ddns/result.csv
 else
   #开始优选IPv4
-  curl -o ./cf_ddns/ip.txt https://github.9898981.xyz/https://raw.githubusercontent.com/ymyuuu/IPDB/refs/heads/main/bestcf.txt
-  $CloudflareST $CFST_URL_R -t $CFST_T -n $CFST_N -dn $CFST_DN -tl $CFST_TL -dt $CFST_DT -tp $CFST_TP -tll $CFST_TLL -sl $CFST_SL -p $CFST_P -tlr $CFST_TLR $CFST_STM -f ./cf_ddns/ip.txt -o ./cf_ddns/result.csv
+  
+  $CloudflareST $CFST_URL_R -t $CFST_T -n $CFST_N -dn $CFST_DN -tl $CFST_TL -dt $CFST_DT -tp $CFST_TP -tll $CFST_TLL -sl $CFST_SL -p $CFST_P -tlr $CFST_TLR -f ./cf_ddns/ip.txt -o ./cf_ddns/result.csv
 fi
 echo "测速完毕";
 
