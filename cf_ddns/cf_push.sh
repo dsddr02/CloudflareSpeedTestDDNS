@@ -40,8 +40,17 @@ if ! ps -p $pid > /dev/null; then
     exit 1
 fi
 
+# 打印 `res` 变量的内容，方便调试
+echo "Response from Telegram API: $res"
+
 # 判断请求是否成功
 resSuccess=$(echo "$res" | jq -r ".ok")
+
+# 如果 `res` 不是有效的 JSON，这行会导致错误
+if [[ $? -ne 0 ]]; then
+    echo "解析返回内容失败，返回内容: $res"
+    exit 1
+fi
 
 if [[ $resSuccess == "true" ]]; then
     echo "Telegram 推送成功"
