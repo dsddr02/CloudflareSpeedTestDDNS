@@ -1,3 +1,5 @@
+#!/bin/bash
+
 # 读取日志信息并格式化
 message_text=$(echo "$(sed "$ ! s/$/\\\n/ " ./cf_ddns/informlog | tr -d '\n')")
 
@@ -16,12 +18,24 @@ if [[ -z ${telegramBotToken} ]]; then
     exit 1
 fi
 
-# 发送 Telegram 消息
-res=$(timeout 20s curl -s -X POST "$TGURL" -H "Content-Type: application/json" \
-    -d '{"chat_id":"'"${telegramBotUserId}"'", "parse_mode":"HTML", "text":"'"${message_text}"'"}')
+# 使用后台运行 curl，并设置超时
+{
+    res=$(curl -s -X POST "$TGURL" -H "Content-Type: application/json" \
+        -d '{"chat_id":"'"${telegramBotUserId}"'", "parse_mode":"HTML", "text":"'"${message_text}"'"}')
+} &
 
-# 判断是否请求超时
-if [[ $? -eq 124 ]]; then
+# 捕获后台进程PID
+pid=$!
+
+# 设置超时时间（例如20秒）
+timeout=20
+sleep $timeout && kill $pid 2>/dev/null &
+
+# 等待进程完成
+wait $pid 2>/dev/null
+
+# 如果curl超时，返回错误
+if ! ps -p $pid > /dev/null; then
     echo "Telegram API 请求超时，请检查网络"
     exit 1
 fi
