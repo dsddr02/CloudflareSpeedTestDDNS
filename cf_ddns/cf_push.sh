@@ -34,8 +34,8 @@ sleep $timeout && kill $pid 2>/dev/null &
 # 等待进程完成
 wait $pid 2>/dev/null
 
-# 如果curl超时，返回错误
-if ! ps -p $pid > /dev/null; then
+# 检查进程是否还存在
+if kill -0 $pid 2>/dev/null; then
     echo "Telegram API 请求超时，请检查网络"
     exit 1
 fi
